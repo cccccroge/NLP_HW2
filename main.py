@@ -151,7 +151,7 @@ if __name__ == "__main__":
         rs.best_estimator_.size_ / 1000000))
 
     # result: visualized
-    _x = [s.parameters['c1'] for s in rs.grid_scores_]
+    _x = [s.parameters['c1'] for s in rs.cv_results_['params']]
     _y = [s.parameters['c2'] for s in rs.grid_scores_]
     _c = [s.mean_validation_score for s in rs.grid_scores_]
 

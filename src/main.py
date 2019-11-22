@@ -9,6 +9,7 @@ from gensim.models import KeyedVectors
 # machine learning
 import sklearn
 import scipy.stats
+from sklearn.externals import joblib
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import RandomizedSearchCV
@@ -16,9 +17,6 @@ import sklearn_crfsuite
 from sklearn_crfsuite import scorers
 from sklearn_crfsuite import metrics
 
-# plot
-import matplotlib.pyplot as plt
-plt.style.use('ggplot')
 
 def word2features(sent, i, w2v):
     word = sent[i][0]
@@ -85,6 +83,22 @@ def sent2labels(sent):
 def sent2tokens(sent):
     return [token for token, postag, label in sent]
 
+def train(X_train_map, y_train_map, existed_model=None, index=-1):
+    crf = None
+    if existed_model is None:
+        crf = sklearn_crfsuite.CRF(
+            algorithm='lbfgs', 
+            c1=0.1, 
+            c2=0.1, 
+            max_iterations=100, 
+            all_possible_transitions=True,
+        )
+    else:
+        crf = joblib.load(existed_model)
+
+    crf.fit(list(X_train_map), list(y_train_map))
+
+    joblib.dump(crf, 'crf_model_' + str(index) + '.pkl')
 
 if __name__ == "__main__":
 
@@ -101,24 +115,12 @@ if __name__ == "__main__":
     word2vec = KeyedVectors.load_word2vec_format("../model/ch.300.bin", binary=True)
     X_train_map = map(functools.partial(sent2features, w2v=word2vec), train_sents)
     y_train_map = map(functools.partial(sent2labels), train_sents)
-    # X_test_map = map(functools.partial(sent2features, w2v=word2vec), test_sents)
-    # y_test_map = map(functools.partial(sent2labels), test_sents)
-
-    #X_train = [sent2features(s, word2vec) for s in train_sents]
-    #y_train = [sent2labels(s) for s in train_sents]
     X_test = [sent2features(s, word2vec) for s in test_sents]
     y_test = [sent2labels(s) for s in test_sents]
 
 
     # 3.Train
-    crf = sklearn_crfsuite.CRF(
-        algorithm='lbfgs', 
-        c1=0.1, 
-        c2=0.1, 
-        max_iterations=100, 
-        all_possible_transitions=True,
-    )
-    crf.fit(list(X_train_map), list(y_train_map))
+    train(X_train_map, y_train_map)
 
     labels = list(crf.classes_)
     labels.remove('O')

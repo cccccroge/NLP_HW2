@@ -1,1 +1,2 @@
 model/cna.word2vec.bin
+src/*.pkl

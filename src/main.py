@@ -1,5 +1,5 @@
 from itertools import chain
-import sys, json, os, functools
+import sys, json, os, functools, itertools
 
 # model
 import gensim
@@ -83,8 +83,11 @@ def sent2labels(sent):
 def sent2tokens(sent):
     return [token for token, postag, label in sent]
 
-def train(X_train_map, y_train_map, existed_model=None, index=-1):
-    crf = None
+def getMapChunk(_map, start, length):
+    return itertools.islice(_map, start, start + length)
+
+def trainAndValidate(X_train_map, y_train_map, X_test, y_test, existed_model=None, index=0, should_dump=True):
+    # train
     if existed_model is None:
         crf = sklearn_crfsuite.CRF(
             algorithm='lbfgs', 
@@ -97,40 +100,13 @@ def train(X_train_map, y_train_map, existed_model=None, index=-1):
         crf = joblib.load(existed_model)
 
     crf.fit(list(X_train_map), list(y_train_map))
+    if should_dump:
+        joblib.dump(crf, 'crf_model_' + str(index) + '.pkl')
 
-    joblib.dump(crf, 'crf_model_' + str(index) + '.pkl')
-
-if __name__ == "__main__":
-
-    # 1.Prepare dataset
-    train_sents = None
-    test_sents = None
-    with open('train_char.json', encoding="utf-8") as json_file:
-        train_sents = json.load(json_file)
-
-    with open('validation_char.json', encoding="utf-8") as json_file:
-        test_sents = json.load(json_file)
-
-    # 2.Turn to features
-    word2vec = KeyedVectors.load_word2vec_format("../model/ch.300.bin", binary=True)
-    X_train_map = map(functools.partial(sent2features, w2v=word2vec), train_sents)
-    y_train_map = map(functools.partial(sent2labels), train_sents)
-    X_test = [sent2features(s, word2vec) for s in test_sents]
-    y_test = [sent2labels(s) for s in test_sents]
-
-
-    # 3.Train
-    train(X_train_map, y_train_map)
-
+    # validate
+    y_pred = crf.predict(X_test)
     labels = list(crf.classes_)
     labels.remove('O')
-    print(labels)
-    
-    # 4.Validate
-    y_pred = crf.predict(X_test)
-    metrics.flat_f1_score(y_test, y_pred, 
-                        average='weighted', labels=labels)
-
     sorted_labels = sorted(
         labels, 
         key=lambda name: (name[1:], name[0])
@@ -139,58 +115,46 @@ if __name__ == "__main__":
         y_test, y_pred, labels=sorted_labels, digits=3
     ))
 
+    
+if __name__ == "__main__":
 
-    # 5. Hyper parameters: c1, c2 optimization
-    # crf = sklearn_crfsuite.CRF(
-    #     algorithm='lbfgs', 
-    #     max_iterations=100, 
-    #     all_possible_transitions=True
-    # )
-    # params_space = {
-    #     'c1': scipy.stats.expon(scale=0.5),
-    #     'c2': scipy.stats.expon(scale=0.05),
-    # }
+    # 1.Prepare dataset
+    with open('train_char.json', encoding="utf-8") as json_file:
+        train_sents = json.load(json_file)
 
-    # f1_scorer = make_scorer(metrics.flat_f1_score, 
-    #                         average='weighted', labels=labels)
+    with open('validation_char.json', encoding="utf-8") as json_file:
+        test_sents = json.load(json_file)
+    len_train = len(train_sents)
 
-    # rs = RandomizedSearchCV(crf, params_space, 
-    #                         cv=3, 
-    #                         verbose=2, 
-    #                         n_jobs=-1, 
-    #                         n_iter=10, 
-    #                         scoring=f1_scorer)
-    # rs.fit(X_train, y_train)
+    # 2.Turn to features
+    word2vec = KeyedVectors.load_word2vec_format("../model/ch.300.bin", binary=True)
+    X_train_map = map(functools.partial(sent2features, w2v=word2vec), train_sents)
+    y_train_map = map(functools.partial(sent2labels), train_sents)
+    X_test = [sent2features(s, word2vec) for s in test_sents]
+    y_test = [sent2labels(s) for s in test_sents]
 
-    # # result: best params
-    # print('best params:', rs.best_params_)
-    # print('best CV score:', rs.best_score_)
-    # print('model size: {:0.2f}M'.format(
-    #     rs.best_estimator_.size_ / 1000000))
+    # 3.Split x, y into chunks to alliviate memory use
+    n = 10
+    length = int( (len_train - len_train % n) / n )
 
-    # # result: visualized
-    # _x = [s['c1'] for s in rs.cv_results_['params']]
-    # _y = [s['c2'] for s in rs.cv_results_['params']]
-    # _c = [s for s in rs.cv_results_['mean_test_score']]
+    # 4.Repeat train & validate for each chunk
+    print('='*20 + 'chunk 0' + '='*20)
+    trainAndValidate(
+        getMapChunk(X_train_map, 0, length),
+        getMapChunk(y_train_map, 0, length),
+        X_test,
+        y_test,
+    )
 
-    # fig = plt.figure()
-    # fig.set_size_inches(12, 12)
-    # ax = plt.gca()
-    # ax.set_yscale('log')
-    # ax.set_xscale('log')
-    # ax.set_xlabel('C1')
-    # ax.set_ylabel('C2')
-    # ax.set_title("Randomized Hyperparameter Search CV Results (min={:0.3}, max={:0.3})".format(
-    #     min(_c), max(_c)
-    # ))
+    for i in range(1, n):
+        print('='*20 + 'chunk ' + str(i) + '='*20)
+        trainAndValidate(
+            getMapChunk(X_train_map, i*length, length),
+            getMapChunk(y_train_map, i*length, length),
+            X_test,
+            y_test,
+            'crf_model_' + str(i-1) + '.pkl',
+            i,
+        )
 
-    # ax.scatter(_x, _y, c=_c, s=60, alpha=0.9, edgecolors=[0,0,0])
-
-    # print("Dark blue => {:0.4}, dark red => {:0.4}".format(min(_c), max(_c)))
-
-    # # predict again with optimized params
-    # crf = rs.best_estimator_
-    # y_pred = crf.predict(X_test)
-    # print(metrics.flat_classification_report(
-    #     y_test, y_pred, labels=sorted_labels, digits=3
-    # ))
+   
